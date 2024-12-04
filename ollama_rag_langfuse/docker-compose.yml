@@ -1,0 +1,89 @@
+version: '3.8'
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - 11434:11434
+    volumes:
+      - ./data/ollama/ollama:/root/.ollama
+    container_name: ollama
+    tty: true
+    restart: always
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
+    networks:
+      - ollama-docker
+
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: db 
+    ports:
+      - 5432:5432
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+      - ./pg-vector/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql
+      - ./llmragapp/init_llmdb.sql:/docker-entrypoint-initdb.d/init_llmdb.sql
+    networks:
+      - ollama-docker
+
+  langfuse-server:
+    image: langfuse/langfuse
+    container_name: langfuse 
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+      - NEXTAUTH_SECRET=mysecret
+      - SALT=mysalt
+      - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000 # generate via `openssl rand -hex 32`
+      - NEXTAUTH_URL=http://localhost:3000
+      - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-false}
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      - LANGFUSE_INIT_ORG_ID=${LANGFUSE_INIT_ORG_ID:-}
+      - LANGFUSE_INIT_ORG_NAME=${LANGFUSE_INIT_ORG_NAME:-}
+      - LANGFUSE_INIT_PROJECT_ID=${LANGFUSE_INIT_PROJECT_ID:-}
+      - LANGFUSE_INIT_PROJECT_NAME=${LANGFUSE_INIT_PROJECT_NAME:-}
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      - LANGFUSE_INIT_USER_EMAIL=${LANGFUSE_INIT_USER_EMAIL:-}
+      - LANGFUSE_INIT_USER_NAME=${LANGFUSE_INIT_USER_NAME:-}
+      - LANGFUSE_INIT_USER_PASSWORD=${LANGFUSE_INIT_USER_PASSWORD:-}
+    networks:
+      - ollama-docker
+
+  llmapp:
+    image: llmragapp:1
+    container_name: llmragapp 
+    ports:
+      - 8051:8051 
+    restart: always
+    environment:
+      - LANGFUSE_PUBLIC_KEY=pk-lf-b42fd934-275f-49d0-b1fd-a1cdb4b8a12a
+      - LANGFUSE_SECRET_KEY=sk-lf-2cf9f14b-9df0-4930-964c-8cff1d87c9de
+      - LANGFUSE_HOST=http://langfuse:3000
+      - OLLAMA_HOST=http://ollama:11434
+      - PGVECTOR_HOST=db
+      - PGVECTOR_PORT=5432
+      - PGVECTOR_USER=postgres
+      - PGVECTOR_PASSWORD=postgres
+      - PGVECTOR_DATABASE=llmdb
+    networks:
+      - ollama-docker
+
+networks:
+  ollama-docker:
+    external: false
